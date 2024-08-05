@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+inline_colorization = "0.1.6"
+regex = "1.10.6"
+resolve-path = "0.1.0"
 serde = { version = "1.0.204", features = ["derive"] }
 serde-xml-rs = "0.6.0"
 serde_json = "1.0.120"
