@@ -395,6 +395,19 @@ fn main() {
         file.write_all(serde_json::to_string_pretty(&test_info).unwrap().as_bytes())
             .unwrap();
     }
+
+    let exit_code = if suites.iter().any(|suite| {
+        suite
+            .tests
+            .iter()
+            .any(|test| test.test.result == Some(TestResult::Error))
+    }) {
+        1
+    } else {
+        0
+    };
+
+    exit(exit_code);
 }
 
 impl TestStartContainer {
