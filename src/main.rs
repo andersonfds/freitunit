@@ -1,3 +1,4 @@
+use clap::command;
 use inline_colorization::*;
 use serde::{Deserialize, Serialize};
 use simple_xml_builder::XMLElement;
@@ -32,6 +33,11 @@ enum DartTestLineType {
 struct DartQualifier {
     #[serde(rename = "type")]
     qualifier_type: DartTestLineType,
+}
+
+#[derive(Debug, Deserialize)]
+struct DartEvent {
+    event: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -158,6 +164,17 @@ impl PartialEq for SuiteContainer {
 }
 
 fn main() {
+    let mut command = command!()
+        .about("Converts Dart test output to JUnit XML format")
+        .override_usage("flutter test --machine | freitunit");
+
+    if atty::is(atty::Stream::Stdin) {
+        let _ = command.print_help();
+        exit(1);
+    }
+
+    command.get_matches();
+
     let stdin = io::stdin();
     let handle = stdin.lock();
     let reader = io::BufReader::new(handle);
@@ -168,6 +185,7 @@ fn main() {
     for line in reader.lines() {
         match line {
             Ok(content) => {
+                let content = content.trim();
                 if let Ok(test_line) = serde_json::from_str::<DartQualifier>(&content) {
                     match test_line.qualifier_type {
                         DartTestLineType::Suite => {
@@ -188,6 +206,7 @@ fn main() {
                             for test in tests.iter_mut() {
                                 if test_done.id == test.test.id {
                                     test.test.result = Some(test_done.result);
+                                    test.print_failed();
                                     break;
                                 }
                             }
@@ -224,11 +243,14 @@ fn main() {
                         DartTestLineType::Start
                         | DartTestLineType::AllSuites
                         | DartTestLineType::Done => {
-                            // Do nothing
+                            io::stdout().flush().expect("Error flushing stdout");
                         }
                     }
+                } else if let Ok(_) = serde_json::from_str::<Vec<DartEvent>>(&content) {
                 } else {
-                    println!("{}", content);
+                    if !content.trim().is_empty() {
+                        println!("{}", content);
+                    }
                 }
             }
             Err(err) => {
@@ -299,25 +321,8 @@ fn main() {
                     error_elem.add_attribute("message", msg.join("\n"));
                     error_elem.add_text(test.test.error.as_ref().unwrap());
                     test_case_elem.add_child(error_elem);
-                    let line = test.test.root_line.unwrap_or(test.test.line.unwrap_or(0));
-                    let column = test
-                        .test
-                        .root_column
-                        .unwrap_or(test.test.column.unwrap_or(0));
-
-                    let error_msg = format!(
-                        "{bg_red}{color_white} ✗ FAIL {color_reset}{bg_reset}{bg_white} {color_bright_black}{style_underline}{}:{}:{}{style_reset}{color_reset}{bg_reset}\n{}\n\n\t{}\n\n\t{color_red}{}{color_reset}\n\n",
-                        suite_path,
-                        line.to_string().trim(),
-                        column.to_string().trim(),
-                        format!("{color_blue}{}{color_reset}", test.test.name),
-                        msg.join("\n").replace("\n", "\n\t").trim(),
-                        test.test.error.as_ref().unwrap().trim().replace("\n", "\n\t").trim(),
-                    );
-
-                    io::stderr().write_all(error_msg.as_bytes()).unwrap();
-                    io::stdout().flush().expect("Error flushing stdout");
                 }
+
                 None => {
                     let mut error_elem = XMLElement::new("error");
                     error_elem.add_attribute("message", "Test not finished");
@@ -389,5 +394,56 @@ fn main() {
             std::fs::File::create(format!("{}/test-info.json", output_path.clone())).unwrap();
         file.write_all(serde_json::to_string_pretty(&test_info).unwrap().as_bytes())
             .unwrap();
+    }
+}
+
+impl TestStartContainer {
+    fn print_failed(&self) {
+        if self.test.result == Some(TestResult::Error)
+            || self.test.result == Some(TestResult::Failure)
+        {
+            let current_dir = std::env::current_dir()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string();
+
+            let suite_path = self
+                .test
+                .root_url
+                .clone()
+                .unwrap_or("".to_string())
+                .replace("file://", "")
+                .replace(&format!("{}/", &current_dir), "");
+
+            let mut msg = vec![];
+
+            if let Some(stack) = self.test.stack_trace.clone() {
+                msg.push(stack.trim().to_string());
+            }
+
+            for print in &self.test.prints {
+                msg.push(print.clone().trim().to_string());
+            }
+
+            let line = self.test.root_line.unwrap_or(self.test.line.unwrap_or(0));
+            let column = self
+                .test
+                .root_column
+                .unwrap_or(self.test.column.unwrap_or(0));
+
+            let error_msg = format!(
+                "{bg_red}{color_white} ✗ FAIL {color_reset}{bg_reset}{bg_white} {color_bright_black}{style_underline}{}:{}:{}{style_reset}{color_reset}{bg_reset}\n{}\n\n\t{}\n\n\t{color_red}{}{color_reset}\n\n",
+                suite_path,
+                line.to_string().trim(),
+                column.to_string().trim(),
+                format!("{color_blue}{}{color_reset}", self.test.name),
+                msg.join("\n").replace("\n", "\n\t").trim(),
+                self.test.error.as_ref().unwrap().trim().replace("\n", "\n\t").trim(),
+            );
+
+            io::stderr().write_all(error_msg.as_bytes()).unwrap();
+            io::stderr().flush().unwrap();
+        }
     }
 }

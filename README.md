@@ -9,7 +9,7 @@ For now it will only output the JUnit XML. One for each test suite.
 Usage:
 
 ```sh
-flutter test --reporter json | freitunit
+flutter test --machine | freitunit
 ```
 
 Installation:

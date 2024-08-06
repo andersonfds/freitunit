@@ -1,9 +1,11 @@
 [package]
 name = "freitunit"
-version = "0.1.0"
+version = "0.1.0-alpha"
 edition = "2021"
 
 [dependencies]
+atty = "0.2.14"
+clap = { verion = "4.5.13", features = ["cargo"] }
 inline_colorization = "0.1.6"
 regex = "1.10.6"
 resolve-path = "0.1.0"
