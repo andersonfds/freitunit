@@ -85,6 +85,10 @@ struct TestStart {
 struct TestStartContainer {
     test: TestStart,
     time: i64,
+    #[serde(skip)]
+    time_started: Option<i64>,
+    #[serde(skip)]
+    time_end: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -103,6 +107,8 @@ struct TestDoneContainer {
     id: i64,
 
     result: TestResult,
+
+    time: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,6 +187,7 @@ fn main() {
     let mut suites = vec![];
     let mut tests = vec![];
     let mut groups = vec![];
+    let mut test_start_time = chrono::Utc::now();
 
     for line in reader.lines() {
         match line {
@@ -194,8 +201,9 @@ fn main() {
                         }
 
                         DartTestLineType::TestStart => {
-                            let test_start: TestStartContainer =
+                            let mut test_start: TestStartContainer =
                                 serde_json::from_str(&content).unwrap();
+                            test_start.time_started = Some(chrono::Utc::now().timestamp_millis());
                             tests.push(test_start);
                         }
 
@@ -206,6 +214,7 @@ fn main() {
                             for test in tests.iter_mut() {
                                 if test_done.id == test.test.id {
                                     test.test.result = Some(test_done.result);
+                                    test.time_end = Some(test_done.time);
                                     test.print_failed();
                                     break;
                                 }
@@ -240,9 +249,11 @@ fn main() {
                             }
                         }
 
-                        DartTestLineType::Start
-                        | DartTestLineType::AllSuites
-                        | DartTestLineType::Done => {
+                        DartTestLineType::Start => {
+                            test_start_time = chrono::Utc::now();
+                        }
+
+                        DartTestLineType::AllSuites | DartTestLineType::Done => {
                             io::stdout().flush().expect("Error flushing stdout");
                         }
                     }
@@ -269,6 +280,8 @@ fn main() {
     for suite in &mut suites {
         let mut i = 0;
         let mut suite_elem = XMLElement::new("testsuite");
+        suite_elem.add_attribute("xmlns:xsi", "https://www.w3.org/2001/XMLSchema-instance");
+        suite_elem.add_attribute("xsi:noNamespaceSchemaLocation", "https://github.com/jenkinsci/xunit-plugin/raw/master/src/main/resources/org/jenkinsci/plugins/xunit/types/model/xsd/junit-10.xsd");
         suite_elem.add_attribute("file", &suite.suite.path);
 
         let suite_path = suite
@@ -294,19 +307,38 @@ fn main() {
                 i += 1;
             }
         }
+        let mut errors = 0;
+        let mut failures = 0;
+        let mut tests = 0;
 
         for test in &suite.tests {
             let mut test_case_elem = XMLElement::new("testcase");
             test_case_elem.add_attribute("name", &test.test.name);
-            let time_in_minutes = test.time as f64 / 1000.0;
-            test_case_elem.add_attribute("time", time_in_minutes.to_string());
+            let time_test_start = test_start_time + chrono::Duration::milliseconds(test.time);
+            let time_test_end = test_start_time + chrono::Duration::milliseconds(test.time_end.unwrap());
+            let duration = time_test_end - time_test_start;
+            test_case_elem.add_attribute("timestamp", time_test_start.format("%Y-%m-%dT%H:%M:%S").to_string());
+            test_case_elem.add_attribute("time", duration.num_milliseconds() as f64 / 1000.0);
 
             match test.test.result {
                 Some(TestResult::Success) => {
-                    // Do nothing
+                    tests += 1;
                 }
 
                 Some(TestResult::Error) | Some(TestResult::Failure) => {
+                    tests += 1;
+                    match test.test.result {
+                        Some(TestResult::Error) => {
+                            errors += 1;
+                        }
+
+                        Some(TestResult::Failure) => {
+                            failures += 1;
+                        }
+
+                        _ => {}
+                    }
+
                     let mut error_elem = XMLElement::new("error");
                     let mut msg = vec![];
 
@@ -379,6 +411,11 @@ fn main() {
             }
             suite_elem.add_child(test_case_elem);
         }
+
+        suite_elem.add_attribute("tests",  tests.to_string());
+        suite_elem.add_attribute("errors", errors.to_string());
+        suite_elem.add_attribute("failures", failures.to_string());
+        suite_elem.add_attribute("timestamp", test_start_time.format("%Y-%m-%dT%H:%M:%S").to_string());
 
         std::fs::create_dir_all(output_path.clone()).unwrap();
 
